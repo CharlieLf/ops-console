@@ -1,0 +1,36 @@
+name: chelops-monitoring
+
+services:
+  console:
+    build: .
+    image: chelops-monitoring:latest
+    container_name: chelops-monitoring
+    restart: unless-stopped
+    ports:
+      - "7070:7070"
+    environment:
+      TZ: ${TZ:-Asia/Jakarta}
+      API_KEY: ${API_KEY:-}
+      HOST_STACKS_DIR: /opt/stacks
+      HOST_PROC: /host/proc
+    volumes:
+      - ./data:/app/data
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Same path as host so compose labels / docker compose resolve correctly.
+      - /opt/stacks:/opt/stacks
+      - /proc:/host/proc:ro
+    networks:
+      - proxy
+    mem_limit: 96m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    labels:
+      ops-console.keep: "true"
+
+networks:
+  proxy:
+    external: true
+    name: proxy

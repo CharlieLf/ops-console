@@ -63,6 +63,7 @@ export interface StackView {
   configFiles: string[];
   running: number;
   total: number;
+  deployed: boolean;
   cpuPct?: number;
   memUsage?: number;
   memPct?: number;

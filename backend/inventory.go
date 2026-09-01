@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -66,6 +68,7 @@ type StackView struct {
 	CPUPct      float64         `json:"cpuPct,omitempty"`
 	MemUsage    int64           `json:"memUsage,omitempty"`
 	MemPct      float64         `json:"memPct,omitempty"`
+	Deployed    bool            `json:"deployed"`
 	Networks    []string        `json:"networks"`
 	Volumes     []string        `json:"volumes"`
 	Containers  []ContainerView `json:"containers"`
@@ -84,7 +87,8 @@ type Snapshot struct {
 }
 
 type Collector struct {
-	docker *Docker
+	docker    *Docker
+	stacksDir string
 
 	mu       sync.Mutex
 	snap     *Snapshot
@@ -95,8 +99,8 @@ type Collector struct {
 	duTTL    time.Duration
 }
 
-func NewCollector(d *Docker) *Collector {
-	return &Collector{docker: d, snapTTL: 5 * time.Second, duTTL: 60 * time.Second}
+func NewCollector(d *Docker, stacksDir string) *Collector {
+	return &Collector{docker: d, stacksDir: stacksDir, snapTTL: 5 * time.Second, duTTL: 60 * time.Second}
 }
 
 func (c *Collector) Snapshot(ctx context.Context, force bool) (*Snapshot, error) {
@@ -254,9 +258,13 @@ func (c *Collector) Stacks(ctx context.Context) ([]StackView, error) {
 		}
 		stack.Containers = append(stack.Containers, cv)
 		stack.Total++
+		stack.Deployed = true
 		if cv.State == "running" {
 			stack.Running++
 		}
+	}
+	for _, stack := range byProject {
+		sortContainers(stack.Containers)
 	}
 	for _, ct := range snap.raw {
 		stack := byProject[ct.Labels[labelProject]]
@@ -286,12 +294,95 @@ func (c *Collector) Stacks(ctx context.Context) ([]StackView, error) {
 		sort.Strings(stack.Networks)
 		sort.Strings(stack.Volumes)
 	}
+	for _, disk := range c.discoverDiskStacks() {
+		if stackOnDiskAlready(byProject, disk) {
+			continue
+		}
+		byProject[disk.Name] = &disk
+	}
 	out := make([]StackView, 0, len(byProject))
 	for _, s := range byProject {
 		out = append(out, *s)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
+}
+
+var composeFilenames = []string{
+	"compose.yaml", "compose.yml", "docker-compose.yml", "docker-compose.yaml",
+}
+
+func sortContainers(list []ContainerView) {
+	sort.SliceStable(list, func(i, j int) bool {
+		rank := func(s string) int {
+			switch s {
+			case "running":
+				return 0
+			case "restarting", "paused":
+				return 1
+			case "exited", "dead", "created":
+				return 2
+			default:
+				return 3
+			}
+		}
+		ri, rj := rank(list[i].State), rank(list[j].State)
+		if ri != rj {
+			return ri < rj
+		}
+		return list[i].Name < list[j].Name
+	})
+}
+
+func stackOnDiskAlready(byProject map[string]*StackView, disk StackView) bool {
+	lower := strings.ToLower(disk.Name)
+	for _, s := range byProject {
+		if strings.ToLower(s.Name) == lower {
+			return true
+		}
+		if disk.WorkingDir != "" && strings.EqualFold(s.WorkingDir, disk.WorkingDir) {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *Collector) discoverDiskStacks() []StackView {
+	if c.stacksDir == "" {
+		return nil
+	}
+	entries, err := os.ReadDir(c.stacksDir)
+	if err != nil {
+		return nil
+	}
+	var out []StackView
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		dir := filepath.Join(c.stacksDir, e.Name())
+		var files []string
+		for _, name := range composeFilenames {
+			p := filepath.Join(dir, name)
+			if st, err := os.Stat(p); err == nil && !st.IsDir() {
+				files = append(files, p)
+			}
+		}
+		if len(files) == 0 {
+			continue
+		}
+		out = append(out, StackView{
+			Name:        e.Name(),
+			WorkingDir:  dir,
+			ConfigFiles: files,
+			Deployed:    false,
+			Containers:  []ContainerView{},
+			Networks:    []string{},
+			Volumes:     []string{},
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
 }
 
 func appendUnique(list []string, v string) []string {

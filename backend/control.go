@@ -28,6 +28,21 @@ func NewControl(d *Docker, collector *Collector, stacksDir string) *Control {
 	return &Control{docker: d, collector: collector, stacksDir: filepath.Clean(stacksDir), compose: bin}
 }
 
+// resolveStackDir finds a stack folder when the compose project name differs
+// from the directory name (e.g. project "scaleo" vs folder "Scaleo").
+func resolveStackDir(stacksDir, name string) string {
+	entries, err := os.ReadDir(stacksDir)
+	if err != nil {
+		return ""
+	}
+	for _, e := range entries {
+		if e.IsDir() && strings.EqualFold(e.Name(), name) {
+			return filepath.Join(stacksDir, e.Name())
+		}
+	}
+	return ""
+}
+
 func (c *Control) resolveStack(ctx context.Context, name string) (workingDir string, files []string, err error) {
 	stacks, err := c.collector.Stacks(ctx)
 	if err != nil {
@@ -48,6 +63,11 @@ func (c *Control) resolveStack(ctx context.Context, name string) (workingDir str
 		break
 	}
 	dir := filepath.Join(c.stacksDir, name)
+	if st, err := os.Stat(dir); err != nil || !st.IsDir() {
+		if resolved := resolveStackDir(c.stacksDir, name); resolved != "" {
+			dir = resolved
+		}
+	}
 	candidates := []string{
 		filepath.Join(dir, "docker-compose.yml"),
 		filepath.Join(dir, "docker-compose.yaml"),

@@ -127,24 +127,29 @@ export default function StackDetail() {
 
   const stack = data;
   const isStandalone = stack.name === "(standalone)";
-  const degraded = stack.running < stack.total;
+  const offline = !stack.deployed || stack.running === 0;
+  const degraded = stack.deployed && stack.running < stack.total;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 text-base">
       <header className="space-y-4">
-        <Link to="/stacks" className="inline-flex items-center gap-1 text-xs text-slate-500 hover:text-slate-300">
-          <ArrowLeft size={14} /> All stacks
+        <Link to="/stacks" className="inline-flex items-center gap-1 text-sm text-slate-500 hover:text-slate-300">
+          <ArrowLeft size={16} /> All stacks
         </Link>
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
-            <h1 className="text-xl font-semibold text-slate-100">{stack.name}</h1>
-            <p className="mt-1 font-mono text-xs text-slate-500">
+            <h1 className="text-2xl font-semibold text-slate-100">{stack.name}</h1>
+            <p className="mt-1 font-mono text-sm text-slate-500">
               {stack.workingDir || stack.configFiles.join(", ") || "no compose path"}
             </p>
-            <p className="mt-1 text-sm text-slate-400">
-              <span className={degraded ? "text-amber-300" : "text-emerald-300"}>
-                {stack.running}/{stack.total} running
-              </span>
+            <p className="mt-2 text-base text-slate-400">
+              {offline ? (
+                <span className="text-slate-400">Offline — not running</span>
+              ) : (
+                <span className={degraded ? "text-amber-300" : "text-emerald-300"}>
+                  {stack.running}/{stack.total} running
+                </span>
+              )}
               {(stack.cpuPct ?? 0) > 0 && (
                 <span className="ml-3">CPU {stack.cpuPct!.toFixed(1)}%</span>
               )}
@@ -155,24 +160,30 @@ export default function StackDetail() {
           </div>
           {!isStandalone && (
             <div className="flex flex-wrap gap-2">
-              <ActionBtn icon={<Play size={14} />} label="Up" busy={busy} action="up" onClick={runAction} />
-              <ActionBtn icon={<Square size={14} />} label="Down" busy={busy} action="down" onClick={runAction} />
-              <ActionBtn icon={<RotateCcw size={14} />} label="Restart" busy={busy} action="restart" onClick={runAction} />
-              <ActionBtn icon={<Hammer size={14} />} label="Rebuild" busy={busy} action="rebuild" onClick={runAction} primary />
-              <ActionBtn icon={<Download size={14} />} label="Pull" busy={busy} action="pull" onClick={runAction} />
-              <button className="btn btn-ghost" disabled={!!busy} onClick={loadCompose}>
-                <FileCode2 size={14} /> Compose
+              <ActionBtn icon={<Play size={16} />} label="Up" busy={busy} action="up" onClick={runAction} primary={offline} />
+              <ActionBtn icon={<Square size={16} />} label="Down" busy={busy} action="down" onClick={runAction} />
+              <ActionBtn icon={<RotateCcw size={16} />} label="Restart" busy={busy} action="restart" onClick={runAction} />
+              <ActionBtn icon={<Hammer size={16} />} label="Rebuild" busy={busy} action="rebuild" onClick={runAction} />
+              <ActionBtn icon={<Download size={16} />} label="Pull" busy={busy} action="pull" onClick={runAction} />
+              <button className="btn btn-ghost text-base" disabled={!!busy} onClick={loadCompose}>
+                <FileCode2 size={16} /> Compose
               </button>
               <button className="btn btn-ghost" onClick={reload}>
-                <RefreshCw size={14} />
+                <RefreshCw size={16} />
               </button>
             </div>
           )}
         </div>
       </header>
 
+      {offline && !isStandalone && (
+        <div className="rounded-xl border border-slate-600/50 bg-slate-500/10 px-5 py-4 text-base text-slate-300">
+          This stack is offline. Press <strong className="text-slate-100">Up</strong> to start all services from the compose file.
+        </div>
+      )}
+
       {msg && (
-        <div className="rounded-lg border border-ink-700 bg-ink-900/80 px-4 py-3 text-sm text-slate-300 whitespace-pre-wrap">
+        <div className="rounded-lg border border-ink-700 bg-ink-900/80 px-4 py-3 text-base text-slate-300 whitespace-pre-wrap">
           {msg}
           <button className="ml-3 text-xs text-slate-500 underline" onClick={() => setMsg(null)}>
             dismiss
@@ -188,7 +199,7 @@ export default function StackDetail() {
               setTab(t);
               if (t === "compose" && !compose) void loadCompose();
             }}
-            className={`px-4 py-2 text-sm capitalize transition ${
+            className={`px-4 py-2.5 text-base capitalize transition ${
               tab === t
                 ? "border-b-2 border-sky-400 text-sky-200"
                 : "text-slate-500 hover:text-slate-300"
@@ -273,28 +284,38 @@ function OverviewTab({
       <div className="space-y-4 lg:col-span-2">
         <Card title="Containers">
           <div className="space-y-3">
-            {stack.containers.map((c) => (
-              <div key={c.id} className="rounded-lg border border-ink-800 bg-ink-850/50 p-3">
+            {stack.containers.length === 0 ? (
+              <Empty>No containers yet. Use Up to create and start them from compose.</Empty>
+            ) : (
+              stack.containers.map((c) => (
+              <div
+                key={c.id}
+                className={`rounded-lg border p-4 ${
+                  c.state === "running"
+                    ? "border-ink-800 bg-ink-850/50"
+                    : "border-amber-500/30 bg-amber-500/5"
+                }`}
+              >
                 <div className="flex flex-wrap items-center gap-2">
                   <StateBadge state={c.state} health={c.health} />
-                  <span className="font-medium text-slate-100">{c.name}</span>
-                  <span className="font-mono text-xs text-slate-500">{c.image}</span>
+                  <span className="text-base font-medium text-slate-100">{c.name}</span>
+                  <span className="font-mono text-sm text-slate-500">{c.image}</span>
                   <div className="ml-auto flex gap-1">
-                    <button className="btn btn-ghost !px-2 !py-1" title="Logs" onClick={() => onLogs(c)}>
-                      <ScrollText size={14} />
+                    <button className="btn btn-ghost !px-2.5 !py-1.5" title="Logs" onClick={() => onLogs(c)}>
+                      <ScrollText size={16} />
                     </button>
                     {c.state === "running" ? (
                       <>
-                        <button className="btn btn-ghost !px-2 !py-1" disabled={!!busy} onClick={() => onContainer(c.id, "restart")}>
-                          <RotateCcw size={14} />
+                        <button className="btn btn-ghost !px-2.5 !py-1.5" disabled={!!busy} onClick={() => onContainer(c.id, "restart")}>
+                          <RotateCcw size={16} />
                         </button>
-                        <button className="btn btn-ghost !px-2 !py-1" disabled={!!busy} onClick={() => onContainer(c.id, "stop")}>
-                          <Square size={14} />
+                        <button className="btn btn-ghost !px-2.5 !py-1.5" disabled={!!busy} onClick={() => onContainer(c.id, "stop")}>
+                          <Square size={16} />
                         </button>
                       </>
                     ) : (
-                      <button className="btn btn-ghost !px-2 !py-1" disabled={!!busy} onClick={() => onContainer(c.id, "start")}>
-                        <Play size={14} />
+                      <button className="btn btn-primary !px-2.5 !py-1.5" disabled={!!busy} onClick={() => onContainer(c.id, "start")}>
+                        <Play size={16} /> Start
                       </button>
                     )}
                   </div>
@@ -302,14 +323,14 @@ function OverviewTab({
                 {c.state === "running" && (c.cpuPct ?? 0) > 0 && (
                   <div className="mt-2 grid gap-2 sm:grid-cols-2">
                     <div>
-                      <div className="mb-0.5 flex justify-between text-[10px] text-slate-500">
+                      <div className="mb-1 flex justify-between text-sm text-slate-500">
                         <span>CPU</span>
                         <span>{c.cpuPct!.toFixed(1)}%</span>
                       </div>
                       <Bar ratio={Math.min(c.cpuPct! / 100, 1)} />
                     </div>
                     <div>
-                      <div className="mb-0.5 flex justify-between text-[10px] text-slate-500">
+                      <div className="mb-1 flex justify-between text-sm text-slate-500">
                         <span>Memory</span>
                         <span>
                           {bytes(c.memUsage)} {c.memPct ? `(${c.memPct.toFixed(0)}%)` : ""}
@@ -338,7 +359,8 @@ function OverviewTab({
                   </ul>
                 )}
               </div>
-            ))}
+            ))
+            )}
           </div>
         </Card>
       </div>

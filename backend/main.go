@@ -68,7 +68,7 @@ func main() {
 	}
 	cancel()
 
-	collector := NewCollector(docker)
+	collector := NewCollector(docker, stacksDir)
 	pruner := NewPruner(docker, store)
 	scheduler := NewScheduler(store, pruner)
 	control := NewControl(docker, collector, stacksDir)

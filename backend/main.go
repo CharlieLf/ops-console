@@ -315,7 +315,7 @@ func (s *server) handleStackGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, stack := range enrichStacks(stacks, s.metrics.Latest()) {
-		if stack.Name == name {
+		if sameStack(stack.Name, name) {
 			writeJSON(w, http.StatusOK, stack)
 			return
 		}
@@ -397,7 +397,8 @@ func (s *server) handleContainerLogs(w http.ResponseWriter, r *http.Request) {
 			tail = n
 		}
 	}
-	logs, err := s.docker.ContainerLogs(r.Context(), r.PathValue("id"), tail)
+	timestamps := r.URL.Query().Get("timestamps") != "0"
+	logs, err := s.docker.ContainerLogs(r.Context(), r.PathValue("id"), tail, timestamps)
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, err.Error())
 		return

@@ -28,6 +28,32 @@ func NewControl(d *Docker, collector *Collector, stacksDir string) *Control {
 	return &Control{docker: d, collector: collector, stacksDir: filepath.Clean(stacksDir), compose: bin}
 }
 
+// composeProjectName makes a name legal for `docker compose -p`.
+// Docker requires lowercase alphanumerics, hyphens, underscores, starting with a letter or number.
+func composeProjectName(name string) string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	var b strings.Builder
+	b.Grow(len(name))
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-', r == '_':
+			b.WriteRune(r)
+		}
+	}
+	out := b.String()
+	if out == "" {
+		return "stack"
+	}
+	if out[0] == '-' || out[0] == '_' {
+		out = "p" + out
+	}
+	return out
+}
+
+func sameStack(a, b string) bool {
+	return composeProjectName(a) == composeProjectName(b)
+}
+
 // resolveStackDir finds a stack folder when the compose project name differs
 // from the directory name (e.g. project "scaleo" vs folder "Scaleo").
 func resolveStackDir(stacksDir, name string) string {
@@ -49,7 +75,7 @@ func (c *Control) resolveStack(ctx context.Context, name string) (workingDir str
 		return "", nil, err
 	}
 	for _, s := range stacks {
-		if s.Name != name {
+		if !sameStack(s.Name, name) {
 			continue
 		}
 		files = append([]string{}, s.ConfigFiles...)
@@ -146,7 +172,13 @@ func (c *Control) StackAction(ctx context.Context, name, action string) (ActionR
 	if len(files) == 0 {
 		return ActionResult{}, fmt.Errorf("no compose file for stack %q", name)
 	}
-	args := []string{"compose", "-p", name}
+	args := []string{"compose"}
+	// Include the mobile profile on down even if the flag is off, so flipping
+	// DEPLOY_MOBILE=false then Down still stops the web container.
+	if action == "down" || stackWantsMobile(dir) {
+		args = append(args, "--profile", "mobile")
+	}
+	args = append(args, "-p", composeProjectName(name))
 	for _, f := range files {
 		args = append(args, "-f", f)
 	}
@@ -169,6 +201,9 @@ func (c *Control) StackAction(ctx context.Context, name, action string) (ActionR
 	cmd := exec.CommandContext(ctx, c.compose, args...)
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "DOCKER_HOST=unix:///var/run/docker.sock")
+	if stackWantsMobile(dir) {
+		cmd.Env = append(cmd.Env, "COMPOSE_PROFILES=mobile")
+	}
 	var buf bytes.Buffer
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf
@@ -200,4 +235,39 @@ func (c *Control) ContainerAction(ctx context.Context, id, action string) error 
 	default:
 		return fmt.Errorf("unknown action %q", action)
 	}
+}
+
+// stackWantsMobile reads the stack's .env. DEPLOY_MOBILE=true (or COMPOSE_PROFILES
+// containing "mobile") means Up/Rebuild should start the Expo web service.
+func stackWantsMobile(dir string) bool {
+	data, err := os.ReadFile(filepath.Join(dir, ".env"))
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		key, val, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		key = strings.TrimSpace(key)
+		val = strings.Trim(strings.TrimSpace(val), `"'`)
+		switch key {
+		case "DEPLOY_MOBILE":
+			switch strings.ToLower(val) {
+			case "1", "true", "yes", "on", "mobile":
+				return true
+			}
+		case "COMPOSE_PROFILES":
+			for _, p := range strings.Split(val, ",") {
+				if strings.TrimSpace(p) == "mobile" {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }

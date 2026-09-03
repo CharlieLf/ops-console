@@ -1,11 +1,13 @@
-import { type ReactNode, useCallback, useEffect, useState } from "react";
+import { type PointerEvent as ReactPointerEvent, type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
   ArrowLeft,
   Download,
   FileCode2,
   Hammer,
+  Maximize2,
   Play,
+  QrCode,
   RefreshCw,
   RotateCcw,
   ScrollText,
@@ -41,6 +43,7 @@ export default function StackDetail() {
   const [logs, setLogs] = useState<{ container: ContainerView; text: string } | null>(null);
   const [logTail, setLogTail] = useState(300);
   const [autoLogs, setAutoLogs] = useState(false);
+  const [logTimestamps, setLogTimestamps] = useState(false);
 
   const runAction = useCallback(
     async (action: "up" | "down" | "restart" | "pull" | "rebuild") => {
@@ -88,10 +91,10 @@ export default function StackDetail() {
   };
 
   const loadLogs = useCallback(
-    async (c: ContainerView) => {
+    async (c: ContainerView, timestamps = logTimestamps) => {
       setBusy("logs");
       try {
-        const res = await api.containerLogs(c.id, logTail);
+        const res = await api.containerLogs(c.id, logTail, timestamps);
         setLogs({ container: c, text: res.logs || "(empty)" });
         setTab("logs");
       } catch (e) {
@@ -100,7 +103,7 @@ export default function StackDetail() {
         setBusy(null);
       }
     },
-    [logTail],
+    [logTail, logTimestamps],
   );
 
   useEffect(() => {
@@ -231,8 +234,13 @@ export default function StackDetail() {
           logs={logs}
           tail={logTail}
           auto={autoLogs}
+          timestamps={logTimestamps}
           onTail={setLogTail}
           onAuto={setAutoLogs}
+          onTimestamps={(v) => {
+            setLogTimestamps(v);
+            if (logs) void loadLogs(logs.container, v);
+          }}
           onSelect={loadLogs}
           onRefresh={() => logs && loadLogs(logs.container)}
         />
@@ -455,13 +463,24 @@ function ComposeTab({
   );
 }
 
+const LOG_HEIGHT_KEY = "ops-console.logHeight";
+const LOG_WRAP_KEY = "ops-console.logWrap";
+
+function readStoredNumber(key: string, fallback: number, min: number, max: number) {
+  const n = Number(localStorage.getItem(key));
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, n));
+}
+
 function LogsTab({
   stack,
   logs,
   tail,
   auto,
+  timestamps,
   onTail,
   onAuto,
+  onTimestamps,
   onSelect,
   onRefresh,
 }: {
@@ -469,11 +488,43 @@ function LogsTab({
   logs: { container: ContainerView; text: string } | null;
   tail: number;
   auto: boolean;
+  timestamps: boolean;
   onTail: (n: number) => void;
   onAuto: (v: boolean) => void;
+  onTimestamps: (v: boolean) => void;
   onSelect: (c: ContainerView) => void;
   onRefresh: () => void;
 }) {
+  const [height, setHeight] = useState(() => readStoredNumber(LOG_HEIGHT_KEY, 520, 200, 4000));
+  const [wrap, setWrap] = useState(() => localStorage.getItem(LOG_WRAP_KEY) === "1");
+  const dragStart = useRef<{ y: number; h: number } | null>(null);
+
+  const applyHeight = (next: number) => {
+    const clamped = Math.min(Math.round(window.innerHeight * 0.9), Math.max(200, Math.round(next)));
+    setHeight(clamped);
+    localStorage.setItem(LOG_HEIGHT_KEY, String(clamped));
+  };
+
+  const onDragStart = (e: ReactPointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    dragStart.current = { y: e.clientY, h: height };
+    e.currentTarget.setPointerCapture(e.pointerId);
+  };
+  const onDragMove = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (!dragStart.current) return;
+    applyHeight(dragStart.current.h + (e.clientY - dragStart.current.y));
+  };
+  const onDragEnd = () => {
+    dragStart.current = null;
+  };
+
+  const qrMode = () => {
+    onTimestamps(false);
+    setWrap(false);
+    localStorage.setItem(LOG_WRAP_KEY, "0");
+    applyHeight(window.innerHeight * 0.8);
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-3">
@@ -505,10 +556,47 @@ function LogsTab({
             ))}
           </select>
         </label>
+        <label className="text-xs text-slate-400">
+          Height
+          <input
+            type="range"
+            min={200}
+            max={Math.max(400, Math.round((typeof window !== "undefined" ? window.innerHeight : 900) * 0.9))}
+            value={height}
+            onChange={(e) => applyHeight(Number(e.target.value))}
+            className="ml-2 w-28 align-middle accent-sky-400"
+          />
+          <span className="ml-1 font-mono text-slate-500">{height}px</span>
+        </label>
+        <label className="flex items-center gap-2 text-xs text-slate-400">
+          <input type="checkbox" checked={timestamps} onChange={(e) => onTimestamps(e.target.checked)} />
+          Timestamps
+        </label>
+        <label className="flex items-center gap-2 text-xs text-slate-400">
+          <input
+            type="checkbox"
+            checked={wrap}
+            onChange={(e) => {
+              setWrap(e.target.checked);
+              localStorage.setItem(LOG_WRAP_KEY, e.target.checked ? "1" : "0");
+            }}
+          />
+          Wrap
+        </label>
         <label className="flex items-center gap-2 text-xs text-slate-400">
           <input type="checkbox" checked={auto} onChange={(e) => onAuto(e.target.checked)} />
           Auto-refresh (5s)
         </label>
+        <button
+          className="btn btn-ghost"
+          title="No timestamps, no wrap, tall pane — for WhatsApp QR"
+          onClick={qrMode}
+        >
+          <QrCode size={14} /> QR view
+        </button>
+        <button className="btn btn-ghost" title="Fill most of the window" onClick={() => applyHeight(window.innerHeight * 0.85)}>
+          <Maximize2 size={14} /> Tall
+        </button>
         <button className="btn btn-ghost" onClick={onRefresh} disabled={!logs}>
           <RefreshCw size={14} /> Refresh
         </button>
@@ -516,10 +604,27 @@ function LogsTab({
       {!logs ? (
         <Empty>Pick a container to view logs.</Empty>
       ) : (
-        <Card title={`Logs · ${logs.container.name}`} subtitle={`last ${tail} lines`}>
-          <pre className="max-h-[32rem] overflow-auto rounded-lg border border-ink-800 bg-ink-950 p-3 font-mono text-[11px] leading-relaxed text-slate-300 whitespace-pre-wrap">
+        <Card title={`Logs · ${logs.container.name}`} subtitle={`last ${tail} lines · drag the bar to resize`}>
+          <pre
+            style={{ height }}
+            className={`overflow-auto rounded-lg border border-ink-800 bg-ink-950 p-3 font-mono text-[12px] text-slate-300 ${
+              wrap ? "whitespace-pre-wrap leading-relaxed" : "whitespace-pre leading-none"
+            }`}
+          >
             {logs.text}
           </pre>
+          <div
+            role="separator"
+            aria-orientation="horizontal"
+            aria-label="Resize logs"
+            onPointerDown={onDragStart}
+            onPointerMove={onDragMove}
+            onPointerUp={onDragEnd}
+            onPointerCancel={onDragEnd}
+            className="mt-1 flex h-3 cursor-ns-resize items-center justify-center rounded-b-lg hover:bg-ink-800"
+          >
+            <span className="block h-1 w-12 rounded-full bg-ink-600" />
+          </div>
         </Card>
       )}
     </div>

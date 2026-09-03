@@ -377,11 +377,17 @@ func (d *Docker) RestartContainer(ctx context.Context, id string, timeoutSec int
 }
 
 // ContainerLogs returns the last n lines of stdout/stderr (no follow).
-func (d *Docker) ContainerLogs(ctx context.Context, id string, tail int) (string, error) {
+// timestamps prefixes each line with RFC3339Nano — leave off to keep ASCII
+// QR codes (and other aligned output) scannable.
+func (d *Docker) ContainerLogs(ctx context.Context, id string, tail int, timestamps bool) (string, error) {
 	if tail <= 0 {
 		tail = 200
 	}
-	path := fmt.Sprintf("/containers/%s/logs?stdout=1&stderr=1&timestamps=1&tail=%d", id, tail)
+	ts := "0"
+	if timestamps {
+		ts = "1"
+	}
+	path := fmt.Sprintf("/containers/%s/logs?stdout=1&stderr=1&timestamps=%s&tail=%d", id, ts, tail)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://docker"+path, nil)
 	if err != nil {
 		return "", err

@@ -56,8 +56,10 @@ export const api = {
     request<ActionResult>(`/stacks/${encodeURIComponent(name)}/${action}`, { method: "POST" }),
   containerAction: (id: string, action: "start" | "stop" | "restart") =>
     request<{ ok: boolean }>(`/containers/${encodeURIComponent(id)}/${action}`, { method: "POST" }),
-  containerLogs: (id: string, tail = 200) =>
-    request<{ logs: string }>(`/containers/${encodeURIComponent(id)}/logs?tail=${tail}`),
+  containerLogs: (id: string, tail = 200, timestamps = false) =>
+    request<{ logs: string }>(
+      `/containers/${encodeURIComponent(id)}/logs?tail=${tail}&timestamps=${timestamps ? "1" : "0"}`,
+    ),
   metrics: () => request<MetricsSnapshot>("/metrics"),
   activity: (limit = 50) => request<{ events: ActivityEvent[] }>(`/activity?limit=${limit}`),
   alerts: () => request<{ alerts: Alert[] }>("/alerts"),

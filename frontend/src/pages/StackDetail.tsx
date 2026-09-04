@@ -41,7 +41,7 @@ export default function StackDetail() {
   const [msg, setMsg] = useState<string | null>(null);
   const [compose, setCompose] = useState<{ path: string; content: string } | null>(null);
   const [logs, setLogs] = useState<{ container: ContainerView; text: string } | null>(null);
-  const [logTail, setLogTail] = useState(300);
+  const [logTail, setLogTail] = useState(500);
   const [autoLogs, setAutoLogs] = useState(false);
   const [logTimestamps, setLogTimestamps] = useState(false);
 
@@ -111,6 +111,13 @@ export default function StackDetail() {
     const id = window.setInterval(() => void loadLogs(logs.container), 5000);
     return () => window.clearInterval(id);
   }, [autoLogs, logs, loadLogs]);
+
+  useEffect(() => {
+    if (tab !== "logs" || !logs) return;
+    void loadLogs(logs.container);
+    // Only refetch when tail/timestamp settings change, not on every log payload.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [logTail, logTimestamps]);
 
   const containerAction = async (id: string, action: "start" | "stop" | "restart") => {
     setBusy(`${id}:${action}`);
@@ -237,10 +244,7 @@ export default function StackDetail() {
           timestamps={logTimestamps}
           onTail={setLogTail}
           onAuto={setAutoLogs}
-          onTimestamps={(v) => {
-            setLogTimestamps(v);
-            if (logs) void loadLogs(logs.container, v);
-          }}
+          onTimestamps={setLogTimestamps}
           onSelect={loadLogs}
           onRefresh={() => logs && loadLogs(logs.container)}
         />
@@ -465,11 +469,22 @@ function ComposeTab({
 
 const LOG_HEIGHT_KEY = "ops-console.logHeight";
 const LOG_WRAP_KEY = "ops-console.logWrap";
+const LOG_MIN = 180;
+const LOG_MAX = 4000;
+
+function defaultLogHeight() {
+  if (typeof window === "undefined") return 640;
+  return Math.max(420, Math.min(LOG_MAX, window.innerHeight - 210));
+}
 
 function readStoredNumber(key: string, fallback: number, min: number, max: number) {
-  const n = Number(localStorage.getItem(key));
-  if (!Number.isFinite(n)) return fallback;
-  return Math.min(max, Math.max(min, n));
+  try {
+    const n = Number(localStorage.getItem(key));
+    if (!Number.isFinite(n)) return fallback;
+    return Math.min(max, Math.max(min, n));
+  } catch {
+    return fallback;
+  }
 }
 
 function LogsTab({
@@ -495,34 +510,76 @@ function LogsTab({
   onSelect: (c: ContainerView) => void;
   onRefresh: () => void;
 }) {
-  const [height, setHeight] = useState(() => readStoredNumber(LOG_HEIGHT_KEY, 520, 200, 4000));
-  const [wrap, setWrap] = useState(() => localStorage.getItem(LOG_WRAP_KEY) === "1");
-  const dragStart = useRef<{ y: number; h: number } | null>(null);
+  const [height, setHeight] = useState(() => readStoredNumber(LOG_HEIGHT_KEY, defaultLogHeight(), LOG_MIN, LOG_MAX));
+  const [wrap, setWrap] = useState(() => {
+    try {
+      return localStorage.getItem(LOG_WRAP_KEY) === "1";
+    } catch {
+      return false;
+    }
+  });
+  const [dragging, setDragging] = useState(false);
+  const preRef = useRef<HTMLPreElement>(null);
+  const drag = useRef<{ y: number; h: number } | null>(null);
 
-  const applyHeight = (next: number) => {
-    const clamped = Math.min(Math.round(window.innerHeight * 0.9), Math.max(200, Math.round(next)));
+  const applyHeight = useCallback((next: number) => {
+    const clamped = Math.min(LOG_MAX, Math.max(LOG_MIN, Math.round(next)));
     setHeight(clamped);
-    localStorage.setItem(LOG_HEIGHT_KEY, String(clamped));
-  };
+    try {
+      localStorage.setItem(LOG_HEIGHT_KEY, String(clamped));
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  const fillWindow = () => applyHeight(window.innerHeight - 160);
 
   const onDragStart = (e: ReactPointerEvent<HTMLDivElement>) => {
     e.preventDefault();
-    dragStart.current = { y: e.clientY, h: height };
+    drag.current = { y: e.clientY, h: height };
+    setDragging(true);
     e.currentTarget.setPointerCapture(e.pointerId);
   };
-  const onDragMove = (e: ReactPointerEvent<HTMLDivElement>) => {
-    if (!dragStart.current) return;
-    applyHeight(dragStart.current.h + (e.clientY - dragStart.current.y));
-  };
-  const onDragEnd = () => {
-    dragStart.current = null;
-  };
+
+  useEffect(() => {
+    if (!dragging) return;
+    const prevCursor = document.body.style.cursor;
+    document.body.classList.add("resizing-logs");
+    const move = (e: PointerEvent) => {
+      if (!drag.current) return;
+      applyHeight(drag.current.h + (e.clientY - drag.current.y));
+    };
+    const stop = () => {
+      drag.current = null;
+      setDragging(false);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", stop);
+    window.addEventListener("pointercancel", stop);
+    return () => {
+      document.body.classList.remove("resizing-logs");
+      document.body.style.cursor = prevCursor;
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", stop);
+      window.removeEventListener("pointercancel", stop);
+    };
+  }, [dragging, applyHeight]);
+
+  useEffect(() => {
+    const el = preRef.current;
+    if (!el || !logs) return;
+    el.scrollTop = el.scrollHeight;
+  }, [logs]);
 
   const qrMode = () => {
     onTimestamps(false);
     setWrap(false);
-    localStorage.setItem(LOG_WRAP_KEY, "0");
-    applyHeight(window.innerHeight * 0.8);
+    try {
+      localStorage.setItem(LOG_WRAP_KEY, "0");
+    } catch {
+      /* ignore */
+    }
+    fillWindow();
   };
 
   return (
@@ -548,8 +605,8 @@ function LogsTab({
         </label>
         <label className="text-xs text-slate-400">
           Lines
-          <select className="input ml-2 w-20" value={tail} onChange={(e) => onTail(Number(e.target.value))}>
-            {[100, 200, 300, 500, 1000].map((n) => (
+          <select className="input ml-2 w-24" value={tail} onChange={(e) => onTail(Number(e.target.value))}>
+            {[100, 300, 500, 1000, 2000, 5000].map((n) => (
               <option key={n} value={n}>
                 {n}
               </option>
@@ -560,11 +617,11 @@ function LogsTab({
           Height
           <input
             type="range"
-            min={200}
-            max={Math.max(400, Math.round((typeof window !== "undefined" ? window.innerHeight : 900) * 0.9))}
-            value={height}
+            min={LOG_MIN}
+            max={Math.max(LOG_MIN, typeof window !== "undefined" ? window.innerHeight - 80 : 900)}
+            value={Math.min(height, typeof window !== "undefined" ? window.innerHeight - 80 : height)}
             onChange={(e) => applyHeight(Number(e.target.value))}
-            className="ml-2 w-28 align-middle accent-sky-400"
+            className="ml-2 w-36 align-middle accent-sky-400"
           />
           <span className="ml-1 font-mono text-slate-500">{height}px</span>
         </label>
@@ -578,7 +635,11 @@ function LogsTab({
             checked={wrap}
             onChange={(e) => {
               setWrap(e.target.checked);
-              localStorage.setItem(LOG_WRAP_KEY, e.target.checked ? "1" : "0");
+              try {
+                localStorage.setItem(LOG_WRAP_KEY, e.target.checked ? "1" : "0");
+              } catch {
+                /* ignore */
+              }
             }}
           />
           Wrap
@@ -589,13 +650,13 @@ function LogsTab({
         </label>
         <button
           className="btn btn-ghost"
-          title="No timestamps, no wrap, tall pane — for WhatsApp QR"
+          title="No timestamps, no wrap, fill the window — for WhatsApp QR"
           onClick={qrMode}
         >
           <QrCode size={14} /> QR view
         </button>
-        <button className="btn btn-ghost" title="Fill most of the window" onClick={() => applyHeight(window.innerHeight * 0.85)}>
-          <Maximize2 size={14} /> Tall
+        <button className="btn btn-ghost" title="Stretch to fill the window" onClick={fillWindow}>
+          <Maximize2 size={14} /> Fill screen
         </button>
         <button className="btn btn-ghost" onClick={onRefresh} disabled={!logs}>
           <RefreshCw size={14} /> Refresh
@@ -604,11 +665,18 @@ function LogsTab({
       {!logs ? (
         <Empty>Pick a container to view logs.</Empty>
       ) : (
-        <Card title={`Logs · ${logs.container.name}`} subtitle={`last ${tail} lines · drag the bar to resize`}>
+        <section className="overflow-hidden rounded-xl border border-ink-700 bg-ink-900/80 shadow-lg shadow-black/20">
+          <header className="flex items-center justify-between gap-3 border-b border-ink-700 px-4 py-2.5">
+            <div>
+              <h2 className="text-sm font-semibold text-slate-100">Logs · {logs.container.name}</h2>
+              <p className="text-xs text-slate-400">last {tail} lines · drag the bottom bar to stretch</p>
+            </div>
+          </header>
           <pre
+            ref={preRef}
             style={{ height }}
-            className={`overflow-auto rounded-lg border border-ink-800 bg-ink-950 p-3 font-mono text-[12px] text-slate-300 ${
-              wrap ? "whitespace-pre-wrap leading-relaxed" : "whitespace-pre leading-none"
+            className={`overflow-auto bg-ink-950 p-3 font-mono text-[12px] text-slate-300 ${
+              wrap ? "whitespace-pre-wrap leading-relaxed" : "whitespace-pre leading-snug"
             }`}
           >
             {logs.text}
@@ -617,15 +685,18 @@ function LogsTab({
             role="separator"
             aria-orientation="horizontal"
             aria-label="Resize logs"
+            aria-valuemin={LOG_MIN}
+            aria-valuemax={LOG_MAX}
+            aria-valuenow={height}
             onPointerDown={onDragStart}
-            onPointerMove={onDragMove}
-            onPointerUp={onDragEnd}
-            onPointerCancel={onDragEnd}
-            className="mt-1 flex h-3 cursor-ns-resize items-center justify-center rounded-b-lg hover:bg-ink-800"
+            onDoubleClick={fillWindow}
+            className={`flex h-5 cursor-ns-resize touch-none items-center justify-center border-t border-ink-700 bg-ink-850/80 hover:bg-sky-500/20 ${
+              dragging ? "bg-sky-500/25" : ""
+            }`}
           >
-            <span className="block h-1 w-12 rounded-full bg-ink-600" />
+            <span className={`block h-1.5 w-16 rounded-full ${dragging ? "bg-sky-400" : "bg-ink-500"}`} />
           </div>
-        </Card>
+        </section>
       )}
     </div>
   );

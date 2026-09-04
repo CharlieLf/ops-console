@@ -397,7 +397,7 @@ func (d *Docker) ContainerLogs(ctx context.Context, id string, tail int, timesta
 		return "", err
 	}
 	defer resp.Body.Close()
-	payload, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	payload, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	if err != nil {
 		return "", err
 	}

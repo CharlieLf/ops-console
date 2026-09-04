@@ -27,6 +27,11 @@
   }
 }
 
+body.resizing-logs {
+  cursor: ns-resize;
+  user-select: none;
+}
+
 @layer components {
   .card {
     @apply rounded-xl border border-ink-700 bg-ink-900/80 shadow-lg shadow-black/20;

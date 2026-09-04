@@ -393,7 +393,7 @@ func (s *server) handleContainerAction(w http.ResponseWriter, r *http.Request) {
 func (s *server) handleContainerLogs(w http.ResponseWriter, r *http.Request) {
 	tail := 200
 	if v := r.URL.Query().Get("tail"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 2000 {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 5000 {
 			tail = n
 		}
 	}
